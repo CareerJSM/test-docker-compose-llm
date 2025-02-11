@@ -36,39 +36,46 @@ sudo yum groupinstall "Development Tools" -y
 sudo yum install kernel-devel-$(uname -r) kernel-headers-$(uname -r)  kernel-modules-extra.x86_64 vulkan-loader -y
 
 # Download and install Tesla driver
+# can check for latest version here:  https://www.nvidia.com/en-us/drivers/
 cd
 wget https://us.download.nvidia.com/tesla/570.86.15/NVIDIA-Linux-x86_64-570.86.15.run
 sudo sh NVIDIA-Linux-x86_64-570.86.15.run --silent --dkms
 
 # Verify installation
 nvidia-smi
-
-# cd /home/ssm-user
-# aws s3 cp --recursive s3://ec2-linux-nvidia-drivers/latest/ .
-# chmod +x NVIDIA-Linux-x86_64*.run
 ```
 
 4. clone the Thrive Ollama git repo
 ```
 sudo yum install -y git
+mkdir -p /home/ssm-user/dev
+cd /home/ssm-user/dev
+git clone https://github.com/CareerJSM/test-docker-compose-llm.git
+```
 
+5. Install Docker and Docker Compose
+```
+sudo yum install docker -y
+sudo service docker start
+sudo chkconfig docker on
+# Install docker-compose
+sudo curl -L https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+# Verify success
+docker-compose version
+```
 
-<!-- nvidia-smi
+6. Assign an elastic IP address to the instance
+In the AWS EC2 console, assign an Elasic IP Address to the instance.  Update the dns records to point to the new IP address.
 
-# Remove existing drivers if present
+7. Lanunch the docker-compose file and reboot
+You may want to review/edit the `.env` file to ensure you don't want to make changes to the hostname or LLM models loaded.
+```
+cd /home/ssm-user/dev/test-docker-compose-llm
+docker-compose up -d
+```
+wait for it to finish.
 
-sudo yum remove nvidia\* -y
-
-# Install prerequisites
-
-sudo yum groupinstall "Development Tools" -y
-sudo yum install kernel-devel-$(uname -r) kernel-headers-$(uname -r) -y
-
-# Download and install Tesla driver
-
-wget https://us.download.nvidia.com/tesla/535.104.05/NVIDIA-Linux-x86_64-535.104.05.run
-sudo sh NVIDIA-Linux-x86_64-535.104.05.run --silent --dkms
-
-# Verify installation
-
-nvidia-smi -->
+8. Reboot
+- Confirm docker-compose automatically restarts after reboot
+- Confirm you can reach the server with HTTPS at the hostname in the `.env`
