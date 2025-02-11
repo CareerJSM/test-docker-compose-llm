@@ -1,0 +1,178 @@
+networks:
+  traefik-network:
+    external: true
+  ollama-network:
+    external: true
+
+volumes:
+  webui-data:
+  ollama-data:
+  traefik-certificates:
+
+services:
+  webui:
+    image: ${WEBUI_IMAGE_TAG}
+    volumes:
+      - webui-data:/app/backend/data
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+    networks:
+      - ollama-network
+      - traefik-network
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    healthcheck:
+      test: timeout 10s bash -c ':> /dev/tcp/127.0.0.1/8080' || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    labels:
+      # Enable Traefik for this container
+      - "traefik.enable=true"
+      # Match incoming requests on a specific hostname
+      - "traefik.http.routers.webui.rule=Host(`${OLLAMA_HOSTNAME}`)"
+      # Assign the router to a named Traefik service
+      - "traefik.http.routers.webui.service=webui"
+      # Use the 'websecure' (HTTPS) entry point
+      - "traefik.http.routers.webui.entrypoints=websecure"
+      # Define the internal container port for routing
+      - "traefik.http.services.webui.loadbalancer.server.port=8080"
+      # Enable TLS on this router
+      - "traefik.http.routers.webui.tls=true"
+      # Use Let's Encrypt for certificate management
+      - "traefik.http.routers.webui.tls.certresolver=letsencrypt"
+      # Pass the original Host header to the container
+      - "traefik.http.services.webui.loadbalancer.passhostheader=true"
+      # Apply a compression middleware
+      - "traefik.http.routers.webui.middlewares=compresstraefik"
+      # Define settings for the compression middleware
+      - "traefik.http.middlewares.compresstraefik.compress=true"
+      # Specify which Docker network Traefik should use for routing
+      - "traefik.docker.network=traefik-network"
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+
+  ollama:
+    image: ${OLLAMA_IMAGE_TAG}
+    entrypoint: ["/usr/bin/bash", "/entrypoint.sh"]
+    volumes:
+      - ollama-data:/root/.ollama
+      - ./entrypoint.sh:/entrypoint.sh
+    environment:
+      MODELS: ${OLLAMA_INSTALL_MODELS}
+    networks:
+      - ollama-network
+      - traefik-network
+    # Uncomment to enable NVIDIA GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${OLLAMA_GPU_COUNT}
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "--version"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels:
+      # Enable Traefik for this container
+      - "traefik.enable=true"
+      # Define TCP router rules for Ollama to match all incoming requests (HostSNI)
+      - "traefik.tcp.routers.ollama.rule=HostSNI(`*`)"
+      # Assign the Ollama router to a named Traefik service
+      - "traefik.tcp.routers.ollama.service=ollama"
+      # Use the 'ollama' (custom) entry point
+      - "traefik.tcp.routers.ollama.entrypoints=ollama"
+      # Define the internal container port for routing to the Ollama service
+      - "traefik.tcp.services.ollama.loadbalancer.server.port=11434"
+      # Specify which Docker network Traefik should use for routing
+      - "traefik.docker.network=traefik-network"
+    restart: unless-stopped
+    depends_on:
+      traefik:
+        condition: service_healthy
+
+  traefik:
+    image: ${TRAEFIK_IMAGE_TAG}
+    command:
+      # Set the log level (DEBUG, INFO, WARN, ERROR)
+      - "--log.level=${TRAEFIK_LOG_LEVEL}"
+      # Enable the built-in API and web-based dashboard
+      - "--api.dashboard=true"
+      # Enable the /ping endpoint so we can health-check Traefik
+      - "--ping=true"
+      # Assign the /ping endpoint to a dedicated entry point on port 8082
+      - "--ping.entrypoint=ping"
+      - "--entrypoints.ping.address=:8082"
+      # Define the primary HTTP entry point on port 80
+      - "--entrypoints.web.address=:80"
+      # Define the secure (HTTPS) entry point on port 443
+      - "--entrypoints.websecure.address=:443"
+      # Define the custom Ollama entry point on port 11434
+      - "--entryPoints.ollama.address=:11434"
+      # Enable the Docker provider to detect containers and their labels
+      - "--providers.docker=true"
+      # Point Traefik to the Docker socket
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      # Prevent automatic exposure of all containers; only expose containers
+      # with "traefik.enable=true"
+      - "--providers.docker.exposedbydefault=false"
+      # Use ACME (Let's Encrypt) to generate/renew certificates via TLS challenge
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      # The email address used by Let's Encrypt for renewal notices
+      - "--certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL}"
+      # The file where ACME certificates are stored inside the container
+      - "--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme/acme.json"
+      # Enable Prometheus metrics
+      - "--metrics.prometheus=true"
+      # Configure Prometheus histogram buckets
+      - "--metrics.prometheus.buckets=0.1,0.3,1.2,5.0"
+      # Check for newer Traefik versions and optionally log that info
+      - "--global.checknewversion=true"
+      # Disable sending anonymous usage data to the Traefik maintainers
+      - "--global.sendanonymoususage=false"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-certificates:/etc/traefik/acme
+    networks:
+      - traefik-network
+    ports:
+      - "80:80"
+      - "443:443"
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD", "wget", "http://localhost:8082/ping", "--spider"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      # Enable Traefik for this container
+      - "traefik.enable=true"
+      # A router to expose the Traefik dashboard
+      - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_HOSTNAME}`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls=true"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      # Basic Authentication for the Traefik dashboard
+      - "traefik.http.routers.dashboard.middlewares=authtraefik"
+      - "traefik.http.middlewares.authtraefik.basicauth.users=${TRAEFIK_BASIC_AUTH}"
+      # Specify the internal server port to the dashboard service
+      - "traefik.http.services.dashboard.loadbalancer.server.port=8080"
+      # Pass the original Host header to the backend
+      - "traefik.http.services.dashboard.loadbalancer.passhostheader=true"
+      # HTTP -> HTTPS redirect for all hosts
+      - "traefik.http.routers.http-catchall.rule=HostRegexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.entrypoints=web"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+    restart: unless-stopped
