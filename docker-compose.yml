@@ -75,7 +75,7 @@ services:
           devices:
             - driver: nvidia
               count: ${OLLAMA_GPU_COUNT}
-              capabilities: [gpu]
+              capabilities: [gpu, utility, compute]
     healthcheck:
       test: ["CMD", "ollama", "--version"]
       interval: 10s

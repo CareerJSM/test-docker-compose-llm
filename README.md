@@ -63,6 +63,30 @@ sudo curl -L https://github.com/docker/compose/releases/latest/download/docker-c
 sudo chmod +x /usr/local/bin/docker-compose
 # Verify success
 docker-compose version
+# Add users to docker group
+sudo usermod -aG docker ssm-user
+sudo usermod -aG docker ec2-user
+# add the networks
+docker network create ollama-network
+docker network create traefik-network
+
+# add nvidia container toolkit
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo | \
+    sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo
+
+# Install NVIDIA Container Toolkit
+sudo dnf clean expire-cache
+sudo dnf install -y nvidia-container-toolkit
+```
+
+```
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+reboot to get things going
+```
+# run to confirm docker is up and spinning
+docker ps
 ```
 
 6. Assign an elastic IP address to the instance
